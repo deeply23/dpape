@@ -1,0 +1,257 @@
+pragma solidity ^0.8.2;
+
+//------------------------------------------------------------------------------
+/*
+
+░██████╗░██╗░░░██╗░█████╗░██╗░░░░░██╗███████╗██╗███████╗██████╗░  ██████╗░███████╗██╗░░░██╗░██████╗
+██╔═══██╗██║░░░██║██╔══██╗██║░░░░░██║██╔════╝██║██╔════╝██╔══██╗  ██╔══██╗██╔════╝██║░░░██║██╔════╝
+██║██╗██║██║░░░██║███████║██║░░░░░██║█████╗░░██║█████╗░░██║░░██║  ██║░░██║█████╗░░╚██╗░██╔╝╚█████╗░
+╚██████╔╝██║░░░██║██╔══██║██║░░░░░██║██╔══╝░░██║██╔══╝░░██║░░██║  ██║░░██║██╔══╝░░░╚████╔╝░░╚═══██╗
+░╚═██╔═╝░╚██████╔╝██║░░██║███████╗██║██║░░░░░██║███████╗██████╔╝  ██████╔╝███████╗░░╚██╔╝░░██████╔╝
+░░░╚═╝░░░░╚═════╝░╚═╝░░╚═╝╚══════╝╚═╝╚═╝░░░░░╚═╝╚══════╝╚═════╝░  ╚═════╝░╚══════╝░░░╚═╝░░░╚═════╝░
+*/
+//------------------------------------------------------------------------------
+// Author: orion (@OrionDevStar)
+//------------------------------------------------------------------------------
+
+contract DerpyApes is ERC721, Ownable, PaymentSplitter {
+  using Strings for uint256;
+  using ECDSA for bytes32;
+  using SafeERC20 for IERC20;
+  using Counters for Counters.Counter;
+
+  IERC20 public paymentToken;
+
+  Counters.Counter private supply;
+  Counters.Counter private Freesupply;
+
+  string public uriPrefix = "";
+  string public uriSuffix = ".json";
+  string public hiddenMetadataUri;
+  
+  uint256 public QD = 3 ether;
+  uint256 public Ethcost = 0.02 ether;
+  uint256 public LooksCost = 12.6 ether; 
+  uint256 public maxSupply = 7777;
+  uint256 public maxFree = 777;
+  uint256 public maxMintAmountPerTx = 3;
+  uint256 public maxFreeMintAmount = 2;
+
+  bool public revealed = false;
+  uint8 public projectStage = 0;
+
+  address internal SIGNER;
+  address internal FREE_SIGNER;
+
+  address[] public freeNFTAddress;
+  address[] internal payees;
+
+  uint256[] internal payeesShares;
+
+  mapping(address => uint256) public mintBalances;
+
+  constructor(address[] memory _freeNFTAddress, address[] memory _payees, uint256[] memory _shares, address _paymentToken) 
+        ERC721("Derpy Apes", "DPA")
+        PaymentSplitter(_payees, _shares) {
+    paymentToken = IERC20(_paymentToken);      
+    hiddenMetadataUri = "ipfs://__CID__/hidden.json";
+    payees = _payees;
+    payeesShares = _shares;
+    freeNFTAddress = _freeNFTAddress;
+    SIGNER = 0xe05655869a11FEbD52F7686bE1B2B48c40f7E613;
+    FREE_SIGNER = 0x08435e8021b0BE0C52bADf989bc3AfC3937a36d4;
+  }  
+
+  //modifier
+  modifier mintCompliance(uint256 _mintAmount)  {
+    require(_mintAmount > 0 && _mintAmount <= maxMintAmountPerTx, "Invalid mint amount!");
+    require(supply.current() + _mintAmount <= maxSupply, "Max supply exceeded!");
+    _;
+  }
+
+  //internal
+  function _baseURI() internal view virtual override returns (string memory) {
+    return uriPrefix;
+  }
+
+  function _checkHash(bytes32 _hash, bytes memory _signature, address _account ) internal view returns (bool) {
+      bytes32 senderHash = _senderMessageHash();
+      if (senderHash != _hash) {
+          return false;
+      }
+      return _hash.recover(_signature) == _account;
+  } 
+
+  function _mintCost(bool _islooks, uint256 _mintAmount) internal {
+    if(!_islooks) 
+      require(msg.value >= Ethcost * _mintAmount, "Insufficient funds!");
+    else {
+      paymentToken.safeTransferFrom(
+        msg.sender,
+        address(this),
+        LooksCost * _mintAmount
+      ); 
+    }
+  }    
+
+  function _mintLoop(address _receiver, uint256 _mintAmount) internal {
+    for (uint256 i = 0; i < _mintAmount; i++) {
+      supply.increment();
+      _safeMint(_receiver, supply.current());
+    }
+  }
+
+  function _senderMessageHash() internal view returns (bytes32) {
+      bytes32 message = keccak256(
+          abi.encodePacked(
+              "\x19Ethereum Signed Message:\n32",
+              keccak256(abi.encodePacked(address(this), msg.sender))
+          )
+      );
+      return message;
+  }
+
+  //external
+  function setHiddenMetadataUri(string memory _hiddenMetadataUri) external onlyOwner {
+    hiddenMetadataUri = _hiddenMetadataUri;
+  }
+
+  function setLooksCost(uint256 _newCost) external onlyOwner {
+    LooksCost = _newCost;
+  }
+
+  function setprojectStage(uint8 _stage) external onlyOwner {
+    projectStage = _stage;
+  }  
+
+  function setRevealed() external onlyOwner {
+    revealed = !revealed;
+  }
+
+  function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+    uriPrefix = _uriPrefix;
+  }
+
+  function setUriSuffix(string memory _uriSuffix) external onlyOwner {
+    uriSuffix = _uriSuffix;
+  }  
+
+  function withdrawAll() external onlyOwner {
+      if(QD > 0){
+      uint256 QDvalue;
+        if (address(this).balance < QD) {
+            QDvalue = address(this).balance;
+            QD -= address(this).balance;
+        } else {
+            QDvalue = QD;
+            QD = 0;
+        }
+        (bool hs, ) = payable(0x89a31e7658510Cfd960067cb97ddcc7Ece3c70C0).call{value: QDvalue}("");
+        require(hs);      
+      } else {
+        for (uint256 i = 0; i < payees.length; i++) {
+            release(payable(payees[i]));
+        }
+      }
+  }
+
+  function withdrawERC20(IERC20 token) external onlyOwner {
+    if(QD > 0){
+        uint256 QDvalue;
+        uint256 ethBalance = (token.balanceOf(address(this)) * Ethcost )/ LooksCost;
+        if (ethBalance  < QD) {
+            QDvalue = token.balanceOf(address(this));
+            QD -= ethBalance;
+        } else {
+            QDvalue = (LooksCost * QD) / Ethcost;
+            QD = 0;
+        }
+         token.transfer(0x89a31e7658510Cfd960067cb97ddcc7Ece3c70C0, QDvalue);
+    } else {
+        for (uint256 i = 0; i < payees.length; i++) {
+            token.transfer(payees[i], token.balanceOf(address(this))*payeesShares[i]/100);
+        }
+    }
+  } 
+
+  //public
+  function avaliableFreeMint(uint256 _mintAmount, address account) public view returns (bool) {
+    if (_mintAmount + mintBalances[account] > maxFreeMintAmount)
+     return false;
+    for (uint256 i = 0; i < freeNFTAddress.length; i ++) {
+      IERC721 token = IERC721(freeNFTAddress[i]);
+      uint256 ownedAmount = token.balanceOf(account);
+      if(ownedAmount > 0 ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function freeMint(uint256 _mintAmount, bytes32 _hash, bytes memory _signature) public mintCompliance(_mintAmount) {    
+    require(projectStage == 0, "Free mint is not active.");
+    require(Freesupply.current() + _mintAmount <= maxFree, "Invalid mint amount!");
+    require(_checkHash(_hash, _signature, FREE_SIGNER), "Address is not on free List");
+    
+    _mintLoop(msg.sender, _mintAmount);
+    mintBalances[msg.sender] += _mintAmount;
+    Freesupply._value += _mintAmount;
+  }
+
+  function mint(bool islooks, uint256 _mintAmount) public payable mintCompliance(_mintAmount) {
+    require(projectStage == 2 , "Public Sale is not active.");
+    _mintCost(islooks,_mintAmount);
+    _mintLoop(msg.sender, _mintAmount);
+  }
+
+  function mintForAddress(uint256 _mintAmount, address _receiver) public mintCompliance(_mintAmount) onlyOwner {
+    require(Freesupply.current() + _mintAmount <= maxFree, "Invalid mint amount!");
+    _mintLoop(_receiver, _mintAmount);
+    Freesupply._value += _mintAmount;
+  }
+
+  function presaleMint(bool islooks, uint256 _mintAmount, bytes32 _hash, bytes memory _signature) public payable mintCompliance(_mintAmount) {
+    require(projectStage == 1, "Presale Sale is not active.");
+    require(_checkHash(_hash, _signature, SIGNER), "Address is not on Presale List");
+    _mintCost(islooks,_mintAmount);
+    _mintLoop(msg.sender, _mintAmount);
+  }
+
+  function tokenURI(uint256 _tokenId) public view virtual override returns (string memory)
+  {
+    require(_exists(_tokenId), "ERC721Metadata: URI query for nonexistent token");
+
+    if (revealed == false) {
+      return hiddenMetadataUri;
+    }
+
+    string memory currentBaseURI = _baseURI();
+    return bytes(currentBaseURI).length > 0
+        ? string(abi.encodePacked(currentBaseURI, _tokenId.toString(), uriSuffix))
+        : "";
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return supply.current();
+  }
+
+  function walletOfOwner(address _owner) public view returns (uint256[] memory)
+  {
+    uint256 ownerTokenCount = balanceOf(_owner);
+    uint256[] memory ownedTokenIds = new uint256[](ownerTokenCount);
+    uint256 currentTokenId = 1;
+    uint256 ownedTokenIndex = 0;
+
+    while (ownedTokenIndex < ownerTokenCount && currentTokenId <= maxSupply) {
+      address currentTokenOwner = ownerOf(currentTokenId);
+      if (currentTokenOwner == _owner) {
+        ownedTokenIds[ownedTokenIndex] = currentTokenId;
+        ownedTokenIndex++;
+      }
+      currentTokenId++;
+    }
+
+    return ownedTokenIds;
+  }
+
+}
